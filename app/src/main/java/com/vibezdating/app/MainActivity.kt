@@ -185,7 +185,7 @@ fun VibezDatingApp() {
                             OutlinedTextField(email, { email = it }, label = { Text("Email address") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Email), modifier = Modifier.fillMaxWidth())
                             Spacer(Modifier.height(10.dp))
                             OutlinedTextField(password, { password = it }, label = { Text("Password (6+ characters)") }, singleLine = true, visualTransformation = PasswordVisualTransformation(), keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Password), modifier = Modifier.fillMaxWidth())
-                            if (message.isNotBlank()) Text(message, color = Color(0xFFB3261E), modifier = Modifier.padding(top = 10.dp))
+                            if (message.isNotBlank()) Text(message, color = if (message.startsWith("Password reset email sent")) Color(0xFF167A45) else Color(0xFFB3261E), modifier = Modifier.padding(top = 10.dp))
                             Spacer(Modifier.height(16.dp))
                             Button(
                                 enabled = !busy,
@@ -214,6 +214,31 @@ fun VibezDatingApp() {
                             ) {
                                 if (busy) CircularProgressIndicator(color = Color.White, modifier = Modifier.size(22.dp), strokeWidth = 2.dp)
                                 else Text(if (isRegister) "Create account" else "Log in", fontSize = 16.sp, fontWeight = FontWeight.Bold)
+                            }
+                            if (!isRegister) {
+                                TextButton(
+                                    enabled = !busy,
+                                    onClick = {
+                                        val cleanEmail = email.trim()
+                                        if (!Patterns.EMAIL_ADDRESS.matcher(cleanEmail).matches()) {
+                                            message = "Enter your email address first, then tap Forgot password."
+                                        } else {
+                                            busy = true
+                                            message = ""
+                                            FirebaseAuth.getInstance().sendPasswordResetEmail(cleanEmail)
+                                                .addOnCompleteListener { result ->
+                                                    busy = false
+                                                    message = if (result.isSuccessful) {
+                                                        "Password reset email sent. Check your inbox and spam folder."
+                                                    } else {
+                                                        result.exception?.localizedMessage ?: "Could not send reset email. Please try again."
+                                                    }
+                                                }
+                                        }
+                                    }
+                                ) {
+                                    Text("Forgot password?", color = Plum, fontWeight = FontWeight.SemiBold)
+                                }
                             }
                             TextButton(onClick = { isRegister = !isRegister; message = "" }) {
                                 Text(if (isRegister) "Already have an account? Log in" else "New to Vibez? Create account", color = Plum)
