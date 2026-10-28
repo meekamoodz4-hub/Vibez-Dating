@@ -38,5 +38,24 @@ service cloud.firestore {
       allow delete: if request.auth != null
         && request.auth.uid == userId;
     }
+
+    // A user can create and list their own choices. A recipient may only
+    // read the specific incoming choice addressed to them, for mutual-like checking.
+    match /swipes/{swipeId} {
+      allow create, update: if request.auth != null
+        && request.resource.data.fromUid == request.auth.uid
+        && request.resource.data.toUid is string
+        && request.resource.data.toUid != request.auth.uid
+        && swipeId == request.auth.uid + '_' + request.resource.data.toUid
+        && request.resource.data.decision in ['like', 'pass']
+        && request.resource.data.keys().hasOnly(['fromUid', 'toUid', 'decision', 'createdAt']);
+      allow get: if request.auth != null
+        && (resource.data.fromUid == request.auth.uid
+          || resource.data.toUid == request.auth.uid);
+      allow list: if request.auth != null
+        && resource.data.fromUid == request.auth.uid;
+      allow delete: if request.auth != null
+        && resource.data.fromUid == request.auth.uid;
+    }
   }
 }
