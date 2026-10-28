@@ -12,6 +12,7 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
 import androidx.compose.ui.Alignment
@@ -25,11 +26,21 @@ import androidx.compose.ui.text.style.TextAlign
 import androidx.compose.ui.unit.dp
 import androidx.compose.ui.unit.sp
 import com.google.firebase.auth.FirebaseAuth
+import com.google.firebase.firestore.FieldValue
 import com.google.firebase.firestore.FirebaseFirestore
 
 private val Plum = Color(0xFF5D236E)
 private val Pink = Color(0xFFFF5A8A)
 private val Ink = Color(0xFF25152D)
+
+private data class PublicProfile(
+    val uid: String,
+    val name: String,
+    val age: Long,
+    val gender: String,
+    val bio: String,
+    val interests: String
+)
 
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
@@ -52,6 +63,10 @@ fun VibezDatingApp() {
     var bio by remember { mutableStateOf("") }
     var interests by remember { mutableStateOf("") }
     var profileLoaded by remember { mutableStateOf(false) }
+    var showDiscover by remember { mutableStateOf(false) }
+    var discoverBusy by remember { mutableStateOf(false) }
+    var discoverMessage by remember { mutableStateOf("") }
+    var publicProfiles by remember { mutableStateOf<List<PublicProfile>>(emptyList()) }
 
     fun loadProfile() {
         val user = FirebaseAuth.getInstance().currentUser ?: return
@@ -67,6 +82,41 @@ fun VibezDatingApp() {
             .addOnFailureListener {
                 profileLoaded = true
                 message = "Could not load profile: ${it.localizedMessage ?: "Check your connection and Firestore rules."}"
+            }
+    }
+
+    fun loadDiscoverProfiles() {
+        val user = FirebaseAuth.getInstance().currentUser
+        if (user == null) {
+            discoverMessage = "Please log in again."
+            return
+        }
+        discoverBusy = true
+        discoverMessage = ""
+        FirebaseFirestore.getInstance().collection("publicProfiles").limit(50).get()
+            .addOnSuccessListener { result ->
+                publicProfiles = result.documents.mapNotNull { doc ->
+                    val uid = doc.getString("uid") ?: return@mapNotNull null
+                    if (uid == user.uid) return@mapNotNull null
+                    val profileAge = doc.getLong("age") ?: return@mapNotNull null
+                    if (profileAge < 18) return@mapNotNull null
+                    PublicProfile(
+                        uid = uid,
+                        name = doc.getString("name").orEmpty(),
+                        age = profileAge,
+                        gender = doc.getString("gender").orEmpty(),
+                        bio = doc.getString("bio").orEmpty(),
+                        interests = doc.getString("interests").orEmpty()
+                    )
+                }
+                discoverBusy = false
+                discoverMessage = if (publicProfiles.isEmpty()) {
+                    "No other profiles yet. Check back when more members join and save their profiles."
+                } else ""
+            }
+            .addOnFailureListener { error ->
+                discoverBusy = false
+                discoverMessage = "Discover needs the updated Firestore rules. Open the setup instructions in the chat if this continues."
             }
     }
 
@@ -86,11 +136,64 @@ fun VibezDatingApp() {
                     modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
-                    Icon(Icons.Default.Favorite, null, tint = Pink, modifier = Modifier.size(52.dp))
-                    Text("Your Vibez Profile", fontSize = 27.sp, fontWeight = FontWeight.ExtraBold, color = Plum)
-                    Text("Signed in as $signedInEmail", color = Ink, textAlign = TextAlign.Center)
-                    Spacer(Modifier.height(18.dp))
-                    if (!profileLoaded) {
+                    Icon(Icons.Default.Favorite, null, tint = Pink, modifier = Modifier.size(48.dp))
+                    Text("Vibez Dating", fontSize = 27.sp, fontWeight = FontWeight.ExtraBold, color = Plum)
+                    Text(if (showDiscover) "Discover new people" else "Signed in as $signedInEmail", color = Ink, textAlign = TextAlign.Center)
+                    Spacer(Modifier.height(14.dp))
+                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
+                        Button(
+                            onClick = { showDiscover = false },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = if (!showDiscover) Plum else Color(0xFFE9DDEC))
+                        ) { Text("My profile", color = if (!showDiscover) Color.White else Plum) }
+                        Button(
+                            onClick = { showDiscover = true; loadDiscoverProfiles() },
+                            modifier = Modifier.weight(1f),
+                            colors = ButtonDefaults.buttonColors(containerColor = if (showDiscover) Plum else Color(0xFFE9DDEC))
+                        ) {
+                            Icon(Icons.Default.Search, null, modifier = Modifier.size(18.dp), tint = if (showDiscover) Color.White else Plum)
+                            Spacer(Modifier.width(4.dp))
+                            Text("Discover", color = if (showDiscover) Color.White else Plum)
+                        }
+                    }
+                    Spacer(Modifier.height(12.dp))
+
+                    if (showDiscover) {
+                        Text("Meet the community", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Plum)
+                        Text("Only display names and profile details are shown here — never email addresses.", fontSize = 12.sp, color = Ink, textAlign = TextAlign.Center)
+                        Spacer(Modifier.height(12.dp))
+                        if (discoverBusy) CircularProgressIndicator(color = Plum)
+                        if (discoverMessage.isNotBlank()) {
+                            Text(discoverMessage, color = if (discoverMessage.startsWith("No other")) Plum else Color(0xFFB3261E), textAlign = TextAlign.Center, modifier = Modifier.padding(8.dp))
+                            if (!discoverBusy && !discoverMessage.startsWith("No other")) {
+                                OutlinedButton(onClick = { loadDiscoverProfiles() }) { Text("Try again", color = Plum) }
+                            }
+                        }
+                        publicProfiles.forEach { profile ->
+                            Surface(
+                                shape = RoundedCornerShape(22.dp),
+                                color = Color.White.copy(alpha = 0.96f),
+                                shadowElevation = 5.dp,
+                                modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)
+                            ) {
+                                Column(Modifier.padding(18.dp)) {
+                                    Text(profile.name, fontSize = 21.sp, fontWeight = FontWeight.Bold, color = Plum)
+                                    Text("${profile.age} • ${profile.gender}", color = Ink, fontWeight = FontWeight.SemiBold)
+                                    if (profile.bio.isNotBlank()) {
+                                        Spacer(Modifier.height(8.dp))
+                                        Text(profile.bio, color = Ink)
+                                    }
+                                    if (profile.interests.isNotBlank()) {
+                                        Spacer(Modifier.height(8.dp))
+                                        Text("Interests: ${profile.interests}", color = Plum, fontSize = 13.sp)
+                                    }
+                                }
+                            }
+                        }
+                        OutlinedButton(onClick = { loadDiscoverProfiles() }, enabled = !discoverBusy, modifier = Modifier.fillMaxWidth()) {
+                            Text("Refresh profiles", color = Plum)
+                        }
+                    } else if (!profileLoaded) {
                         CircularProgressIndicator(color = Plum)
                         Text("Loading your profile…", color = Plum, modifier = Modifier.padding(top = 8.dp))
                     } else {
@@ -103,11 +206,11 @@ fun VibezDatingApp() {
                             Column(Modifier.padding(20.dp), horizontalAlignment = Alignment.CenterHorizontally) {
                                 Text("Create or update your profile", fontWeight = FontWeight.Bold, fontSize = 19.sp, color = Ink)
                                 Spacer(Modifier.height(12.dp))
-                                OutlinedTextField(name, { name = it }, label = { Text("Display name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                                OutlinedTextField(name, { name = it.take(60) }, label = { Text("Display name") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                                 Spacer(Modifier.height(8.dp))
                                 OutlinedTextField(age, { age = it.filter(Char::isDigit).take(3) }, label = { Text("Age (18+)") }, singleLine = true, keyboardOptions = KeyboardOptions(keyboardType = KeyboardType.Number), modifier = Modifier.fillMaxWidth())
                                 Spacer(Modifier.height(8.dp))
-                                OutlinedTextField(gender, { gender = it }, label = { Text("Gender") }, singleLine = true, modifier = Modifier.fillMaxWidth())
+                                OutlinedTextField(gender, { gender = it.take(40) }, label = { Text("Gender") }, singleLine = true, modifier = Modifier.fillMaxWidth())
                                 Spacer(Modifier.height(8.dp))
                                 OutlinedTextField(bio, { bio = it.take(300) }, label = { Text("About me (up to 300 characters)") }, minLines = 3, modifier = Modifier.fillMaxWidth())
                                 Spacer(Modifier.height(8.dp))
@@ -130,7 +233,8 @@ fun VibezDatingApp() {
                                             else {
                                                 busy = true
                                                 message = ""
-                                                val data = hashMapOf<String, Any>(
+                                                val db = FirebaseFirestore.getInstance()
+                                                val privateData = hashMapOf<String, Any>(
                                                     "uid" to user.uid,
                                                     "email" to (user.email ?: ""),
                                                     "name" to name.trim(),
@@ -138,14 +242,28 @@ fun VibezDatingApp() {
                                                     "gender" to gender.trim(),
                                                     "bio" to bio.trim(),
                                                     "interests" to interests.trim(),
-                                                    "updatedAt" to com.google.firebase.firestore.FieldValue.serverTimestamp()
+                                                    "updatedAt" to FieldValue.serverTimestamp()
                                                 )
-                                                FirebaseFirestore.getInstance().collection("profiles").document(user.uid)
-                                                    .set(data)
+                                                val publicData = hashMapOf<String, Any>(
+                                                    "uid" to user.uid,
+                                                    "name" to name.trim(),
+                                                    "age" to ageValue,
+                                                    "gender" to gender.trim(),
+                                                    "bio" to bio.trim(),
+                                                    "interests" to interests.trim(),
+                                                    "updatedAt" to FieldValue.serverTimestamp()
+                                                )
+                                                db.batch()
+                                                    .set(db.collection("profiles").document(user.uid), privateData)
+                                                    .set(db.collection("publicProfiles").document(user.uid), publicData)
+                                                    .commit()
                                                     .addOnCompleteListener { task ->
                                                         busy = false
-                                                        message = if (task.isSuccessful) "Profile saved successfully!" else
+                                                        message = if (task.isSuccessful) {
+                                                            "Profile saved successfully!"
+                                                        } else {
                                                             "Save failed: ${task.exception?.localizedMessage ?: "Check Firestore security rules."}"
+                                                        }
                                                     }
                                             }
                                         }
@@ -165,9 +283,11 @@ fun VibezDatingApp() {
                         FirebaseAuth.getInstance().signOut()
                         signedInEmail = ""
                         profileLoaded = false
+                        showDiscover = false
+                        publicProfiles = emptyList()
                         name = ""; age = ""; gender = ""; bio = ""; interests = ""; message = ""
                     }) { Text("Sign out", color = Plum) }
-                    Text("Vibez Dating is for adults 18+. More features are coming soon.", color = Plum, fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
+                    Text("Vibez Dating is for adults 18+. Be respectful and protect your personal information.", color = Plum, fontSize = 12.sp, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 10.dp))
                 }
             } else {
                 Column(horizontalAlignment = Alignment.CenterHorizontally, modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState())) {
