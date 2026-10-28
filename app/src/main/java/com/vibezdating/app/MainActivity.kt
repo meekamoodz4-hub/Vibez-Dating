@@ -183,9 +183,9 @@ fun VibezDatingApp() {
                     }
                 }
             }
-            .addOnFailureListener {
+            .addOnFailureListener { error ->
                 matchesBusy = false
-                chatMessage = "Could not load matches: " + (it.localizedMessage ?: "Unknown Firebase error")
+                chatMessage = "Could not load matches. Firebase code: ${(error as? com.google.firebase.firestore.FirebaseFirestoreException)?.code ?: "UNKNOWN"}. Details: ${error.localizedMessage ?: "No details returned"}"
             }
     }
 
