@@ -2,7 +2,7 @@ rules_version = '2';
 
 service cloud.firestore {
   match /databases/{database}/documents {
-    // Private account profile: only its owner can access it.
+
     match /profiles/{userId} {
       allow create, update: if request.auth != null
         && request.auth.uid == userId
@@ -14,7 +14,6 @@ service cloud.firestore {
         && request.auth.uid == userId;
     }
 
-    // Discoverable profile: intentionally contains no email or account secrets.
     match /publicProfiles/{userId} {
       allow get, list: if request.auth != null;
       allow create, update: if request.auth != null
@@ -39,8 +38,6 @@ service cloud.firestore {
         && request.auth.uid == userId;
     }
 
-    // A user can create and list their own choices. A recipient may only
-    // read the specific incoming choice addressed to them, for mutual-like checking.
     match /swipes/{swipeId} {
       allow create, update: if request.auth != null
         && request.resource.data.fromUid == request.auth.uid
@@ -56,6 +53,43 @@ service cloud.firestore {
         && resource.data.fromUid == request.auth.uid;
       allow delete: if request.auth != null
         && resource.data.fromUid == request.auth.uid;
+    }
+
+    // Only mutual Likes can create a match.
+    match /matches/{matchId} {
+      allow create: if request.auth != null
+        && request.resource.data.keys().hasOnly(['participants', 'createdAt'])
+        && request.resource.data.participants is list
+        && request.resource.data.participants.size() == 2
+        && request.auth.uid in request.resource.data.participants
+        && request.resource.data.participants[0] is string
+        && request.resource.data.participants[1] is string
+        && request.resource.data.participants[0] != request.resource.data.participants[1]
+        && matchId == request.resource.data.participants[0] + '_'
+          + request.resource.data.participants[1]
+        && get(/databases/$(database)/documents/swipes/$(request.resource.data.participants[0] + '_' + request.resource.data.participants[1])).data.decision == 'like'
+        && get(/databases/$(database)/documents/swipes/$(request.resource.data.participants[1] + '_' + request.resource.data.participants[0])).data.decision == 'like';
+
+      allow get, list: if request.auth != null
+        && resource.data.participants.hasAny([request.auth.uid]);
+
+      allow update, delete: if false;
+
+      match /messages/{messageId} {
+        function isMatchMember() {
+          return request.auth != null
+            && get(/databases/$(database)/documents/matches/$(matchId)).data.participants.hasAny([request.auth.uid]);
+        }
+
+        allow get, list: if isMatchMember();
+        allow create: if isMatchMember()
+          && request.resource.data.keys().hasOnly(['senderUid', 'text', 'createdAt'])
+          && request.resource.data.senderUid == request.auth.uid
+          && request.resource.data.text is string
+          && request.resource.data.text.size() >= 1
+          && request.resource.data.text.size() <= 1000;
+        allow update, delete: if false;
+      }
     }
   }
 }
