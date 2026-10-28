@@ -12,6 +12,8 @@ import androidx.compose.foundation.text.KeyboardOptions
 import androidx.compose.foundation.verticalScroll
 import androidx.compose.material.icons.Icons
 import androidx.compose.material.icons.filled.Favorite
+import androidx.compose.material.icons.filled.Close
+import androidx.compose.material.icons.filled.FavoriteBorder
 import androidx.compose.material.icons.filled.Search
 import androidx.compose.material3.*
 import androidx.compose.runtime.*
@@ -67,6 +69,9 @@ fun VibezDatingApp() {
     var discoverBusy by remember { mutableStateOf(false) }
     var discoverMessage by remember { mutableStateOf("") }
     var publicProfiles by remember { mutableStateOf<List<PublicProfile>>(emptyList()) }
+    var swipeIndex by remember { mutableIntStateOf(0) }
+    var swipeBusy by remember { mutableStateOf(false) }
+    var swipeMessage by remember { mutableStateOf("") }
 
     fun loadProfile() {
         val user = FirebaseAuth.getInstance().currentUser ?: return
@@ -93,30 +98,39 @@ fun VibezDatingApp() {
         }
         discoverBusy = true
         discoverMessage = ""
-        FirebaseFirestore.getInstance().collection("publicProfiles").limit(50).get()
+        val db = FirebaseFirestore.getInstance()
+        db.collection("publicProfiles").limit(50).get()
             .addOnSuccessListener { result ->
-                publicProfiles = result.documents.mapNotNull { doc ->
+                val candidates = result.documents.mapNotNull { doc ->
                     val uid = doc.getString("uid") ?: return@mapNotNull null
                     if (uid == user.uid) return@mapNotNull null
                     val profileAge = doc.getLong("age") ?: return@mapNotNull null
                     if (profileAge < 18) return@mapNotNull null
-                    PublicProfile(
-                        uid = uid,
-                        name = doc.getString("name").orEmpty(),
-                        age = profileAge,
-                        gender = doc.getString("gender").orEmpty(),
-                        bio = doc.getString("bio").orEmpty(),
-                        interests = doc.getString("interests").orEmpty()
-                    )
+                    PublicProfile(uid, doc.getString("name").orEmpty(), profileAge,
+                        doc.getString("gender").orEmpty(), doc.getString("bio").orEmpty(),
+                        doc.getString("interests").orEmpty())
                 }
-                discoverBusy = false
-                discoverMessage = if (publicProfiles.isEmpty()) {
-                    "No other profiles yet. Check back when more members join and save their profiles."
-                } else ""
+                db.collection("swipes").whereEqualTo("fromUid", user.uid).get()
+                    .addOnSuccessListener { decisions ->
+                        val seen = decisions.documents.mapNotNull { it.getString("toUid") }.toSet()
+                        publicProfiles = candidates.filter { it.uid !in seen }
+                        swipeIndex = 0
+                        discoverBusy = false
+                        discoverMessage = if (publicProfiles.isEmpty()) {
+                            if (candidates.isEmpty()) "No other profiles yet. Invite people to join Vibez Dating."
+                            else "You have seen everyone available. Refresh later for new profiles."
+                        } else ""
+                    }
+                    .addOnFailureListener {
+                        publicProfiles = candidates
+                        swipeIndex = 0
+                        discoverBusy = false
+                        discoverMessage = "Could not load your previous choices. Check Firestore rules."
+                    }
             }
-            .addOnFailureListener { error ->
+            .addOnFailureListener {
                 discoverBusy = false
-                discoverMessage = "Discover needs the updated Firestore rules. Open the setup instructions in the chat if this continues."
+                discoverMessage = "Could not load profiles. Check your internet connection and Firestore rules."
             }
     }
 
@@ -169,26 +183,76 @@ fun VibezDatingApp() {
                                 OutlinedButton(onClick = { loadDiscoverProfiles() }) { Text("Try again", color = Plum) }
                             }
                         }
-                        publicProfiles.forEach { profile ->
-                            Surface(
-                                shape = RoundedCornerShape(22.dp),
-                                color = Color.White.copy(alpha = 0.96f),
-                                shadowElevation = 5.dp,
-                                modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)
-                            ) {
-                                Column(Modifier.padding(18.dp)) {
-                                    Text(profile.name, fontSize = 21.sp, fontWeight = FontWeight.Bold, color = Plum)
-                                    Text("${profile.age} • ${profile.gender}", color = Ink, fontWeight = FontWeight.SemiBold)
-                                    if (profile.bio.isNotBlank()) {
-                                        Spacer(Modifier.height(8.dp))
-                                        Text(profile.bio, color = Ink)
+                        if (swipeIndex < publicProfiles.size) {
+                            val profile = publicProfiles[swipeIndex]
+                            Surface(shape = RoundedCornerShape(28.dp), color = Color.White,
+                                shadowElevation = 10.dp, modifier = Modifier.fillMaxWidth().padding(vertical = 6.dp)) {
+                                Column(Modifier.padding(22.dp)) {
+                                    Box(Modifier.fillMaxWidth().height(145.dp).background(Color(0xFFFFE4EE), RoundedCornerShape(20.dp)), contentAlignment = Alignment.Center) {
+                                        Icon(Icons.Default.Favorite, null, tint = Pink, modifier = Modifier.size(58.dp))
                                     }
-                                    if (profile.interests.isNotBlank()) {
-                                        Spacer(Modifier.height(8.dp))
-                                        Text("Interests: ${profile.interests}", color = Plum, fontSize = 13.sp)
-                                    }
+                                    Spacer(Modifier.height(16.dp))
+                                    Text("${profile.name}, ${profile.age}", fontSize = 27.sp, fontWeight = FontWeight.ExtraBold, color = Plum)
+                                    Text(profile.gender, color = Ink, fontWeight = FontWeight.SemiBold)
+                                    if (profile.bio.isNotBlank()) { Spacer(Modifier.height(10.dp)); Text(profile.bio, color = Ink, fontSize = 16.sp) }
+                                    if (profile.interests.isNotBlank()) { Spacer(Modifier.height(10.dp)); Text("Interests • ${profile.interests}", color = Plum, fontSize = 14.sp) }
+                                    Text("Profile ${swipeIndex + 1} of ${publicProfiles.size}", color = Color.Gray, fontSize = 12.sp,
+                                        modifier = Modifier.align(Alignment.End).padding(top = 12.dp))
                                 }
                             }
+                            Spacer(Modifier.height(10.dp))
+                            Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(12.dp)) {
+                                OutlinedButton(enabled = !swipeBusy, onClick = {
+                                    val current = FirebaseAuth.getInstance().currentUser
+                                    if (current != null) {
+                                        swipeBusy = true
+                                        val data = hashMapOf<String, Any>("fromUid" to current.uid, "toUid" to profile.uid,
+                                            "decision" to "pass", "createdAt" to FieldValue.serverTimestamp())
+                                        FirebaseFirestore.getInstance().collection("swipes").document("${current.uid}_${profile.uid}")
+                                            .set(data).addOnCompleteListener { task ->
+                                                swipeBusy = false
+                                                if (task.isSuccessful) { swipeIndex++; swipeMessage = "Passed. Next profile!" }
+                                                else swipeMessage = "Could not save Pass. Check Firestore rules."
+                                            }
+                                    }
+                                }, modifier = Modifier.weight(1f).height(52.dp), shape = RoundedCornerShape(50)) {
+                                    Icon(Icons.Default.Close, null, tint = Color(0xFFB3261E))
+                                    Spacer(Modifier.width(5.dp)); Text("Pass", color = Color(0xFFB3261E))
+                                }
+                                Button(enabled = !swipeBusy, onClick = {
+                                    val current = FirebaseAuth.getInstance().currentUser
+                                    if (current != null) {
+                                        swipeBusy = true
+                                        val data = hashMapOf<String, Any>("fromUid" to current.uid, "toUid" to profile.uid,
+                                            "decision" to "like", "createdAt" to FieldValue.serverTimestamp())
+                                        FirebaseFirestore.getInstance().collection("swipes").document("${current.uid}_${profile.uid}")
+                                            .set(data).addOnCompleteListener { task ->
+                                                if (!task.isSuccessful) {
+                                                    swipeBusy = false
+                                                    swipeMessage = "Could not save Like. Check Firestore rules."
+                                                } else {
+                                                    FirebaseFirestore.getInstance().collection("swipes").document("${profile.uid}_${current.uid}").get()
+                                                        .addOnCompleteListener { opposite ->
+                                                            swipeBusy = false
+                                                            swipeMessage = if (opposite.isSuccessful && opposite.result?.getString("decision") == "like")
+                                                                "It's a match! You both liked each other."
+                                                            else "Like saved! If they Like you too, it's a match."
+                                                            swipeIndex++
+                                                        }
+                                                }
+                                            }
+                                    }
+                                }, modifier = Modifier.weight(1f).height(52.dp), shape = RoundedCornerShape(50),
+                                    colors = ButtonDefaults.buttonColors(containerColor = Pink)) {
+                                    Icon(Icons.Default.FavoriteBorder, null, tint = Color.White)
+                                    Spacer(Modifier.width(5.dp)); Text("Like", color = Color.White)
+                                }
+                            }
+                            if (swipeMessage.isNotBlank()) Text(swipeMessage, color = Plum, textAlign = TextAlign.Center,
+                                modifier = Modifier.fillMaxWidth().padding(8.dp))
+                        } else if (!discoverBusy && publicProfiles.isNotEmpty()) {
+                            Text("You're all caught up!", fontSize = 21.sp, fontWeight = FontWeight.Bold, color = Plum)
+                            Text("You've made a choice for every profile currently available.", color = Ink, textAlign = TextAlign.Center)
                         }
                         OutlinedButton(onClick = { loadDiscoverProfiles() }, enabled = !discoverBusy, modifier = Modifier.fillMaxWidth()) {
                             Text("Refresh profiles", color = Plum)
