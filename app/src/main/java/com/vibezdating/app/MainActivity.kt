@@ -44,6 +44,9 @@ private data class PublicProfile(
     val interests: String
 )
 
+private data class MatchItem(val id: String, val otherUid: String, val otherName: String)
+private data class ChatLine(val id: String, val senderUid: String, val text: String)
+
 class MainActivity : ComponentActivity() {
     override fun onCreate(savedInstanceState: Bundle?) {
         super.onCreate(savedInstanceState)
@@ -67,6 +70,13 @@ fun VibezDatingApp() {
     var profileLoaded by remember { mutableStateOf(false) }
     var showDiscover by remember { mutableStateOf(false) }
     var showChats by remember { mutableStateOf(false) }
+    var selectedMatch by remember { mutableStateOf<MatchItem?>(null) }
+    var matches by remember { mutableStateOf<List<MatchItem>>(emptyList()) }
+    var matchesBusy by remember { mutableStateOf(false) }
+    var chatLines by remember { mutableStateOf<List<ChatLine>>(emptyList()) }
+    var chatDraft by remember { mutableStateOf("") }
+    var chatMessage by remember { mutableStateOf("") }
+    var chatBusy by remember { mutableStateOf(false) }
     var discoverBusy by remember { mutableStateOf(false) }
     var discoverMessage by remember { mutableStateOf("") }
     var publicProfiles by remember { mutableStateOf<List<PublicProfile>>(emptyList()) }
@@ -132,6 +142,90 @@ fun VibezDatingApp() {
             .addOnFailureListener {
                 discoverBusy = false
                 discoverMessage = "Could not load profiles. Check your internet connection and Firestore rules."
+            }
+    }
+
+    fun loadMatches() {
+        val user = FirebaseAuth.getInstance().currentUser ?: return
+        matchesBusy = true
+        FirebaseFirestore.getInstance().collection("matches")
+            .whereArrayContains("participants", user.uid).get()
+            .addOnSuccessListener { result ->
+                val items = result.documents.mapNotNull { doc ->
+                    val participants = doc.get("participants") as? List<*> ?: return@mapNotNull null
+                    val otherUid = participants.filterIsInstance<String>().firstOrNull { it != user.uid } ?: return@mapNotNull null
+                    MatchItem(doc.id, otherUid, "")
+                }
+                if (items.isEmpty()) {
+                    matches = emptyList()
+                    matchesBusy = false
+                } else {
+                    var remaining = items.size
+                    val named = mutableListOf<MatchItem>()
+                    items.forEach { item ->
+                        FirebaseFirestore.getInstance().collection("publicProfiles").document(item.otherUid).get()
+                            .addOnSuccessListener { profileDoc ->
+                                named.add(item.copy(otherName = profileDoc.getString("name") ?: "Vibez member"))
+                                remaining--
+                                if (remaining == 0) {
+                                    matches = named.sortedBy { it.otherName.lowercase() }
+                                    matchesBusy = false
+                                }
+                            }
+                            .addOnFailureListener {
+                                named.add(item.copy(otherName = "Vibez member"))
+                                remaining--
+                                if (remaining == 0) {
+                                    matches = named.sortedBy { it.otherName.lowercase() }
+                                    matchesBusy = false
+                                }
+                            }
+                    }
+                }
+            }
+            .addOnFailureListener {
+                matchesBusy = false
+                chatMessage = "Could not load matches. Check Firestore rules."
+            }
+    }
+
+    fun loadChat(match: MatchItem) {
+        selectedMatch = match
+        chatMessage = ""
+        val user = FirebaseAuth.getInstance().currentUser ?: return
+        FirebaseFirestore.getInstance().collection("matches").document(match.id)
+            .collection("messages").orderBy("createdAt").limit(100).get()
+            .addOnSuccessListener { result ->
+                chatLines = result.documents.map { doc ->
+                    ChatLine(doc.id, doc.getString("senderUid").orEmpty(), doc.getString("text").orEmpty())
+                }
+            }
+            .addOnFailureListener {
+                chatMessage = "Could not load messages. Check your connection and Firestore rules."
+            }
+    }
+
+    fun sendChatMessage() {
+        val user = FirebaseAuth.getInstance().currentUser ?: return
+        val match = selectedMatch ?: return
+        val clean = chatDraft.trim()
+        if (clean.isBlank() || chatBusy) return
+        chatBusy = true
+        val data = hashMapOf<String, Any>(
+            "senderUid" to user.uid,
+            "text" to clean.take(1000),
+            "createdAt" to FieldValue.serverTimestamp()
+        )
+        FirebaseFirestore.getInstance().collection("matches").document(match.id)
+            .collection("messages").add(data)
+            .addOnSuccessListener {
+                chatDraft = ""
+                chatBusy = false
+                loadChat(match)
+            }
+            .addOnFailureListener {
+                chatBusy = false
+                chatMessage = "Message could not be sent. Check Firestore rules."
             }
     }
 
@@ -219,9 +313,25 @@ fun VibezDatingApp() {
                                                     FirebaseFirestore.getInstance().collection("swipes").document("${profile.uid}_${current.uid}").get()
                                                         .addOnCompleteListener { opposite ->
                                                             swipeBusy = false
-                                                            swipeMessage = if (opposite.isSuccessful && opposite.result?.getString("decision") == "like")
-                                                                "It's a match! You both liked each other."
-                                                            else "Like saved! If they Like you too, it's a match."
+                                                            if (opposite.isSuccessful && opposite.result?.getString("decision") == "like") {
+                                                                val ids = listOf(current.uid, profile.uid).sorted()
+                                                                val matchId = ids.joinToString("_")
+                                                                val matchData = hashMapOf<String, Any>(
+                                                                    "participants" to ids,
+                                                                    "createdAt" to FieldValue.serverTimestamp()
+                                                                )
+                                                                FirebaseFirestore.getInstance().collection("matches").document(matchId)
+                                                                    .set(matchData)
+                                                                    .addOnSuccessListener {
+                                                                        swipeMessage = "It's a match! You both liked each other. Open Matches / Chat below."
+                                                                        loadMatches()
+                                                                    }
+                                                                    .addOnFailureListener {
+                                                                        swipeMessage = "It's a mutual Like, but saving the match failed. Check Firestore rules."
+                                                                    }
+                                                            } else {
+                                                                swipeMessage = "Like saved! If they Like you too, it's a match."
+                                                            }
                                                             swipeIndex++
                                                         }
                                                 }
@@ -243,21 +353,73 @@ fun VibezDatingApp() {
                             Text("Refresh profiles", color = Plum)
                         }
                     } else if (showChats) {
-                        Text("Matches & Chats", fontSize = 23.sp, fontWeight = FontWeight.Bold, color = Plum)
-                        Spacer(Modifier.height(8.dp))
-                        Text("Your conversations will appear here when you and another member Like each other.", color = Ink, textAlign = TextAlign.Center)
-                        Spacer(Modifier.height(18.dp))
-                        Surface(shape = RoundedCornerShape(22.dp), color = Color.White.copy(alpha = 0.94f), shadowElevation = 6.dp, modifier = Modifier.fillMaxWidth()) {
-                            Column(Modifier.padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
-                                Icon(Icons.Default.Favorite, null, tint = Pink, modifier = Modifier.size(42.dp))
-                                Spacer(Modifier.height(10.dp))
-                                Text("No chats yet", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Plum)
-                                Spacer(Modifier.height(6.dp))
-                                Text("When two people Like each other, they become a match. We'll show your matches and open private conversations here.", color = Ink, textAlign = TextAlign.Center)
-                                Spacer(Modifier.height(14.dp))
-                                Button(onClick = { showDiscover = true; showChats = false; loadDiscoverProfiles() }, colors = ButtonDefaults.buttonColors(containerColor = Plum)) {
-                                    Text("Discover people", color = Color.White)
+                        if (selectedMatch != null) {
+                            val currentMatch = selectedMatch!!
+                            Row(Modifier.fillMaxWidth(), verticalAlignment = Alignment.CenterVertically) {
+                                TextButton(onClick = { selectedMatch = null; chatLines = emptyList(); loadMatches() }) {
+                                    Text("← Matches", color = Plum)
                                 }
+                                Text(currentMatch.otherName, fontSize = 21.sp, fontWeight = FontWeight.Bold, color = Plum)
+                            }
+                            Spacer(Modifier.height(8.dp))
+                            if (chatMessage.isNotBlank()) Text(chatMessage, color = Color(0xFFB3261E), textAlign = TextAlign.Center)
+                            if (chatLines.isEmpty()) {
+                                Text("Say hello and start the conversation.", color = Ink, modifier = Modifier.padding(vertical = 24.dp))
+                            } else {
+                                chatLines.forEach { line ->
+                                    Row(Modifier.fillMaxWidth(), horizontalArrangement = if (line.senderUid == FirebaseAuth.getInstance().currentUser?.uid) Arrangement.End else Arrangement.Start) {
+                                        Surface(color = if (line.senderUid == FirebaseAuth.getInstance().currentUser?.uid) Color(0xFFFFD8E5) else Color.White,
+                                            shape = RoundedCornerShape(18.dp), shadowElevation = 1.dp, modifier = Modifier.widthIn(max = 280.dp)) {
+                                            Text(line.text, color = Ink, modifier = Modifier.padding(horizontal = 14.dp, vertical = 10.dp))
+                                        }
+                                    }
+                                    Spacer(Modifier.height(6.dp))
+                                }
+                            }
+                            Spacer(Modifier.height(12.dp))
+                            OutlinedTextField(value = chatDraft, onValueChange = { chatDraft = it.take(1000) },
+                                label = { Text("Write a message") }, modifier = Modifier.fillMaxWidth(), maxLines = 4)
+                            Spacer(Modifier.height(8.dp))
+                            Button(onClick = { sendChatMessage() }, enabled = chatDraft.isNotBlank() && !chatBusy,
+                                modifier = Modifier.fillMaxWidth(), colors = ButtonDefaults.buttonColors(containerColor = Plum)) {
+                                Text(if (chatBusy) "Sending…" else "Send message", color = Color.White)
+                            }
+                        } else {
+                            Text("Matches & Chats", fontSize = 23.sp, fontWeight = FontWeight.Bold, color = Plum)
+                            Text("Only people who Like each other can chat.", color = Ink, textAlign = TextAlign.Center)
+                            Spacer(Modifier.height(12.dp))
+                            if (matchesBusy) CircularProgressIndicator(color = Plum)
+                            if (chatMessage.isNotBlank()) Text(chatMessage, color = Color(0xFFB3261E), textAlign = TextAlign.Center)
+                            if (!matchesBusy && matches.isEmpty()) {
+                                Surface(shape = RoundedCornerShape(22.dp), color = Color.White.copy(alpha = 0.94f), shadowElevation = 6.dp, modifier = Modifier.fillMaxWidth()) {
+                                    Column(Modifier.padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                        Icon(Icons.Default.Favorite, null, tint = Pink, modifier = Modifier.size(42.dp))
+                                        Spacer(Modifier.height(10.dp))
+                                        Text("No matches yet", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Plum)
+                                        Text("When you and another member Like each other, your match will appear here.", color = Ink, textAlign = TextAlign.Center, modifier = Modifier.padding(top = 6.dp))
+                                        Spacer(Modifier.height(12.dp))
+                                        Button(onClick = { showDiscover = true; showChats = false; loadDiscoverProfiles() }, colors = ButtonDefaults.buttonColors(containerColor = Plum)) {
+                                            Text("Discover people", color = Color.White)
+                                        }
+                                    }
+                                }
+                            }
+                            matches.forEach { item ->
+                                Surface(onClick = { loadChat(item) }, shape = RoundedCornerShape(18.dp), color = Color.White,
+                                    shadowElevation = 3.dp, modifier = Modifier.fillMaxWidth().padding(vertical = 5.dp)) {
+                                    Row(Modifier.padding(16.dp), verticalAlignment = Alignment.CenterVertically) {
+                                        Icon(Icons.Default.Favorite, null, tint = Pink, modifier = Modifier.size(30.dp))
+                                        Spacer(Modifier.width(12.dp))
+                                        Column(Modifier.weight(1f)) {
+                                            Text(item.otherName, color = Plum, fontWeight = FontWeight.Bold, fontSize = 17.sp)
+                                            Text("Tap to open private chat", color = Ink, fontSize = 12.sp)
+                                        }
+                                        Text("›", color = Plum, fontSize = 28.sp)
+                                    }
+                                }
+                            }
+                            OutlinedButton(onClick = { loadMatches() }, enabled = !matchesBusy, modifier = Modifier.fillMaxWidth()) {
+                                Text("Refresh matches", color = Plum)
                             }
                         }
                     } else if (!profileLoaded) {
@@ -352,6 +514,8 @@ fun VibezDatingApp() {
                         profileLoaded = false
                         showDiscover = false
                         showChats = false
+                        selectedMatch = null
+                        matches = emptyList()
                         publicProfiles = emptyList()
                         name = ""; age = ""; gender = ""; bio = ""; interests = ""; message = ""
                     }) { Text("Sign out", color = Plum) }
@@ -452,7 +616,7 @@ fun VibezDatingApp() {
                                 Text("Discover", color = if (showDiscover) Pink else Plum, fontSize = 11.sp)
                             }
                         }
-                        TextButton(onClick = { showDiscover = false; showChats = true }) {
+                        TextButton(onClick = { showDiscover = false; showChats = true; selectedMatch = null; loadMatches() }) {
                             Column(horizontalAlignment = Alignment.CenterHorizontally) {
                                 Icon(Icons.Default.Favorite, null, tint = if (showChats) Pink else Plum)
                                 Text("Matches / Chat", color = if (showChats) Pink else Plum, fontSize = 11.sp)
