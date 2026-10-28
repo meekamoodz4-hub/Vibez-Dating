@@ -66,6 +66,7 @@ fun VibezDatingApp() {
     var interests by remember { mutableStateOf("") }
     var profileLoaded by remember { mutableStateOf(false) }
     var showDiscover by remember { mutableStateOf(false) }
+    var showChats by remember { mutableStateOf(false) }
     var discoverBusy by remember { mutableStateOf(false) }
     var discoverMessage by remember { mutableStateOf("") }
     var publicProfiles by remember { mutableStateOf<List<PublicProfile>>(emptyList()) }
@@ -142,35 +143,19 @@ fun VibezDatingApp() {
         Box(
             modifier = Modifier.fillMaxSize().background(
                 Brush.verticalGradient(listOf(Color(0xFFFFEEF4), Color(0xFFF5E9FF), Color.White))
-            ).padding(20.dp),
+            ),
             contentAlignment = Alignment.Center
         ) {
             if (signedInEmail.isNotBlank()) {
                 Column(
-                    modifier = Modifier.fillMaxWidth().verticalScroll(rememberScrollState()),
+                    modifier = Modifier.fillMaxSize().padding(horizontal = 20.dp, vertical = 12.dp).padding(bottom = 86.dp).verticalScroll(rememberScrollState()),
                     horizontalAlignment = Alignment.CenterHorizontally
                 ) {
                     Icon(Icons.Default.Favorite, null, tint = Pink, modifier = Modifier.size(48.dp))
                     Text("Vibez Dating", fontSize = 27.sp, fontWeight = FontWeight.ExtraBold, color = Plum)
-                    Text(if (showDiscover) "Discover new people" else "Signed in as $signedInEmail", color = Ink, textAlign = TextAlign.Center)
+                    Text(if (showDiscover) "Discover new people" else if (showChats) "Matches & chats" else "Signed in as $signedInEmail", color = Ink, textAlign = TextAlign.Center)
                     Spacer(Modifier.height(14.dp))
-                    Row(Modifier.fillMaxWidth(), horizontalArrangement = Arrangement.spacedBy(8.dp)) {
-                        Button(
-                            onClick = { showDiscover = false },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = if (!showDiscover) Plum else Color(0xFFE9DDEC))
-                        ) { Text("My profile", color = if (!showDiscover) Color.White else Plum) }
-                        Button(
-                            onClick = { showDiscover = true; loadDiscoverProfiles() },
-                            modifier = Modifier.weight(1f),
-                            colors = ButtonDefaults.buttonColors(containerColor = if (showDiscover) Plum else Color(0xFFE9DDEC))
-                        ) {
-                            Icon(Icons.Default.Search, null, modifier = Modifier.size(18.dp), tint = if (showDiscover) Color.White else Plum)
-                            Spacer(Modifier.width(4.dp))
-                            Text("Discover", color = if (showDiscover) Color.White else Plum)
-                        }
-                    }
-                    Spacer(Modifier.height(12.dp))
+
 
                     if (showDiscover) {
                         Text("Meet the community", fontSize = 22.sp, fontWeight = FontWeight.Bold, color = Plum)
@@ -256,6 +241,24 @@ fun VibezDatingApp() {
                         }
                         OutlinedButton(onClick = { loadDiscoverProfiles() }, enabled = !discoverBusy, modifier = Modifier.fillMaxWidth()) {
                             Text("Refresh profiles", color = Plum)
+                        }
+                    } else if (showChats) {
+                        Text("Matches & Chats", fontSize = 23.sp, fontWeight = FontWeight.Bold, color = Plum)
+                        Spacer(Modifier.height(8.dp))
+                        Text("Your conversations will appear here when you and another member Like each other.", color = Ink, textAlign = TextAlign.Center)
+                        Spacer(Modifier.height(18.dp))
+                        Surface(shape = RoundedCornerShape(22.dp), color = Color.White.copy(alpha = 0.94f), shadowElevation = 6.dp, modifier = Modifier.fillMaxWidth()) {
+                            Column(Modifier.padding(22.dp), horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Default.Favorite, null, tint = Pink, modifier = Modifier.size(42.dp))
+                                Spacer(Modifier.height(10.dp))
+                                Text("No chats yet", fontSize = 20.sp, fontWeight = FontWeight.Bold, color = Plum)
+                                Spacer(Modifier.height(6.dp))
+                                Text("When two people Like each other, they become a match. We'll show your matches and open private conversations here.", color = Ink, textAlign = TextAlign.Center)
+                                Spacer(Modifier.height(14.dp))
+                                Button(onClick = { showDiscover = true; showChats = false; loadDiscoverProfiles() }, colors = ButtonDefaults.buttonColors(containerColor = Plum)) {
+                                    Text("Discover people", color = Color.White)
+                                }
+                            }
                         }
                     } else if (!profileLoaded) {
                         CircularProgressIndicator(color = Plum)
@@ -348,6 +351,7 @@ fun VibezDatingApp() {
                         signedInEmail = ""
                         profileLoaded = false
                         showDiscover = false
+                        showChats = false
                         publicProfiles = emptyList()
                         name = ""; age = ""; gender = ""; bio = ""; interests = ""; message = ""
                     }) { Text("Sign out", color = Plum) }
@@ -426,6 +430,32 @@ fun VibezDatingApp() {
                             }
                             TextButton(onClick = { isRegister = !isRegister; message = "" }) {
                                 Text(if (isRegister) "Already have an account? Log in" else "New to Vibez? Create account", color = Plum)
+                            }
+                        }
+                    }
+                }
+            }
+            if (signedInEmail.isNotBlank()) {
+                Surface(color = Color.White.copy(alpha = 0.98f), shadowElevation = 12.dp,
+                    modifier = Modifier.align(Alignment.BottomCenter).fillMaxWidth()) {
+                    Row(modifier = Modifier.fillMaxWidth().navigationBarsPadding().padding(horizontal = 8.dp, vertical = 6.dp),
+                        horizontalArrangement = Arrangement.SpaceEvenly, verticalAlignment = Alignment.CenterVertically) {
+                        TextButton(onClick = { showDiscover = false; showChats = false }) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Default.FavoriteBorder, null, tint = if (!showDiscover && !showChats) Pink else Plum)
+                                Text("Profile", color = if (!showDiscover && !showChats) Pink else Plum, fontSize = 11.sp)
+                            }
+                        }
+                        TextButton(onClick = { showDiscover = true; showChats = false; loadDiscoverProfiles() }) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Default.Search, null, tint = if (showDiscover) Pink else Plum)
+                                Text("Discover", color = if (showDiscover) Pink else Plum, fontSize = 11.sp)
+                            }
+                        }
+                        TextButton(onClick = { showDiscover = false; showChats = true }) {
+                            Column(horizontalAlignment = Alignment.CenterHorizontally) {
+                                Icon(Icons.Default.Favorite, null, tint = if (showChats) Pink else Plum)
+                                Text("Matches / Chat", color = if (showChats) Pink else Plum, fontSize = 11.sp)
                             }
                         }
                     }
